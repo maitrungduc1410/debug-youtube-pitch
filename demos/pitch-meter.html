@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tua nhanh thì cao độ có đổi không?</title>
+<style>
+  :root {
+    --bg: #0b0d12;
+    --card: #151924;
+    --text: #f2f4f8;
+    --muted: #8a93a6;
+    --accent: #ffd43b;
+    --accent-2: #4dabf7;
+    --danger: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    justify-content: center;
+  }
+  main {
+    width: 100%;
+    max-width: 520px;
+    padding: 28px 20px 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  h1 { margin: 0; font-size: 24px; text-align: center; }
+  .readout {
+    background: var(--card);
+    border-radius: 20px;
+    padding: 26px 16px 20px;
+    text-align: center;
+  }
+  #hz {
+    font-size: 84px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -2px;
+    line-height: 1;
+    transition: color .2s;
+  }
+  #hz.shifted { color: var(--danger); }
+  #hz small { font-size: 36px; font-weight: 700; color: var(--muted); letter-spacing: 0; }
+  #note { margin-top: 10px; font-size: 22px; color: var(--muted); }
+  #ratio { margin-top: 4px; font-size: 18px; color: var(--accent-2); min-height: 27px; }
+  canvas {
+    width: 100%;
+    height: 170px;
+    background: var(--card);
+    border-radius: 16px;
+    display: block;
+  }
+  .controls { display: flex; flex-direction: column; gap: 14px; }
+  .row { display: flex; gap: 10px; }
+  button {
+    flex: 1;
+    font: inherit;
+    font-size: 20px;
+    font-weight: 700;
+    padding: 14px 0;
+    border: 0;
+    border-radius: 14px;
+    background: var(--card);
+    color: var(--text);
+    cursor: pointer;
+  }
+  button.active { background: var(--accent); color: #111; }
+  #play { background: var(--accent-2); color: #08111c; }
+  .toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--card);
+    border-radius: 14px;
+    padding: 14px 18px;
+    font-size: 20px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .toggle code { font-size: 18px; }
+  .toggle input { width: 26px; height: 26px; accent-color: var(--accent); }
+  pre {
+    margin: 0;
+    background: #000;
+    border-radius: 14px;
+    padding: 14px 16px;
+    font: 15px/1.6 ui-monospace, "SF Mono", Menlo, monospace;
+    color: #a5d8ff;
+    white-space: pre-wrap;
+  }
+  pre .v { color: var(--accent); }
+  details { color: var(--muted); }
+  details summary { cursor: pointer; }
+  .source { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+  select, input[type=file] { font: inherit; color: var(--text); }
+  select { background: var(--card); border: 0; border-radius: 10px; padding: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Tua nhanh thì cao độ có đổi không?</h1>
+
+  <div class="readout">
+    <div id="hz">—</div>
+    <div id="note">Bấm “Phát” để bắt đầu đo</div>
+    <div id="ratio"></div>
+  </div>
+
+  <canvas id="spectrum"></canvas>
+
+  <section class="controls">
+    <button id="play">▶ Phát</button>
+    <div class="row" id="rates">
+      <button data-rate="0.5">0.5x</button>
+      <button data-rate="1" class="active">1x</button>
+      <button data-rate="2">2x</button>
+      <button data-rate="4">4x</button>
+    </div>
+    <label class="toggle">
+      <code>preservesPitch</code>
+      <input type="checkbox" id="pp" checked>
+    </label>
+    <pre id="code"></pre>
+    <details>
+      <summary>Đổi nguồn âm thanh</summary>
+      <div class="source">
+        <select id="source">
+          <option value="440">Tiếng bíp 440 Hz (nốt La)</option>
+          <option value="220">Tiếng bíp 220 Hz (La thấp)</option>
+          <option value="file">File của mình…</option>
+        </select>
+        <input type="file" id="file" accept="audio/*,video/*" hidden>
+      </div>
+    </details>
+  </section>
+</main>
+
+<audio id="audio" loop></audio>
+
+<script>
+const audio = document.getElementById('audio');
+const hzEl = document.getElementById('hz');
+const noteEl = document.getElementById('note');
+const ratioEl = document.getElementById('ratio');
+const codeEl = document.getElementById('code');
+const ppEl = document.getElementById('pp');
+const playBtn = document.getElementById('play');
+const canvas = document.getElementById('spectrum');
+const sourceEl = document.getElementById('source');
+const fileEl = document.getElementById('file');
+
+const MIN_HZ = 50;
+const MAX_HZ = 5000;
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const SOLFEGE = ['Đô', 'Đô#', 'Rê', 'Rê#', 'Mi', 'Fa', 'Fa#', 'Sol', 'Sol#', 'La', 'La#', 'Si'];
+
+let baseHz = 440;
+let ctx, analyser, spectrum, captureSrc, smoothedHz = 0;
+
+function makeToneWav(freq, seconds, sampleRate = 48000) {
+  const n = Math.round(seconds * sampleRate);
+  const buf = new ArrayBuffer(44 + n * 2);
+  const dv = new DataView(buf);
+  const writeStr = (off, s) => [...s].forEach((c, i) => dv.setUint8(off + i, c.charCodeAt(0)));
+  writeStr(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); writeStr(8, 'WAVE');
+  writeStr(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, sampleRate, true); dv.setUint32(28, sampleRate * 2, true);
+  dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+  writeStr(36, 'data'); dv.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    const s = 0.35 * Math.sin(2 * Math.PI * freq * i / sampleRate);
+    dv.setInt16(44 + i * 2, s * 32767, true);
+  }
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+
+function setSource(value) {
+  if (value === 'file') {
+    fileEl.click();
+    return;
+  }
+  baseHz = Number(value);
+  // Whole number of cycles in 10 s, so the loop point is seamless.
+  audio.src = makeToneWav(baseHz, 10);
+  if (ctx) audio.play();
+}
+
+fileEl.addEventListener('change', () => {
+  const f = fileEl.files[0];
+  if (!f) return;
+  baseHz = 0;
+  audio.src = URL.createObjectURL(f);
+  if (ctx) audio.play();
+});
+sourceEl.addEventListener('change', () => setSource(sourceEl.value));
+
+function updateCode() {
+  const rate = audio.playbackRate;
+  codeEl.innerHTML =
+    `audio.playbackRate = <span class="v">${rate}</span>;\n` +
+    `audio.preservesPitch = <span class="v">${audio.preservesPitch}</span>;`;
+}
+
+document.getElementById('rates').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  // Loading a new src resets playbackRate to defaultPlaybackRate.
+  audio.defaultPlaybackRate = audio.playbackRate = Number(btn.dataset.rate);
+  document.querySelectorAll('#rates button').forEach((b) => b.classList.toggle('active', b === btn));
+  updateCode();
+});
+
+ppEl.addEventListener('change', () => {
+  audio.preservesPitch = ppEl.checked;
+  updateCode();
+});
+
+async function start() {
+  ctx = new AudioContext();
+  await ctx.resume();
+  await audio.play();
+  analyser = ctx.createAnalyser();
+  analyser.fftSize = 32768;
+  analyser.smoothingTimeConstant = 0.2;
+  connectCapture();
+  // The captured track ends when src changes, so reattach to the new one.
+  audio.addEventListener('playing', connectCapture);
+  // Firefox's mozCaptureStream() removes the element's audio from the speakers.
+  if (!audio.captureStream) analyser.connect(ctx.destination);
+  spectrum = new Float32Array(analyser.frequencyBinCount);
+  requestAnimationFrame(tick);
+}
+
+function connectCapture() {
+  if (captureSrc) captureSrc.disconnect();
+  const stream = audio.captureStream ? audio.captureStream() : audio.mozCaptureStream();
+  captureSrc = ctx.createMediaStreamSource(stream);
+  captureSrc.connect(analyser);
+}
+
+playBtn.addEventListener('click', async () => {
+  if (!ctx) {
+    playBtn.textContent = '⏸ Dừng';
+    await start();
+    return;
+  }
+  if (audio.paused) {
+    await audio.play();
+    playBtn.textContent = '⏸ Dừng';
+  } else {
+    audio.pause();
+    playBtn.textContent = '▶ Phát';
+  }
+});
+
+function findPeakHz() {
+  analyser.getFloatFrequencyData(spectrum);
+  const hzPerBin = ctx.sampleRate / analyser.fftSize;
+  const lo = Math.floor(MIN_HZ / hzPerBin);
+  const hi = Math.min(spectrum.length - 2, Math.ceil(MAX_HZ / hzPerBin));
+  let best = lo;
+  for (let i = lo; i <= hi; i++) if (spectrum[i] > spectrum[best]) best = i;
+  if (spectrum[best] < -75) return null;
+  const a = spectrum[best - 1], b = spectrum[best], c = spectrum[best + 1];
+  const offset = 0.5 * (a - c) / (a - 2 * b + c || 1);
+  return (best + offset) * hzPerBin;
+}
+
+function noteName(hz) {
+  const midi = Math.round(12 * Math.log2(hz / 440) + 69);
+  const octave = Math.floor(midi / 12) - 1;
+  const idx = ((midi % 12) + 12) % 12;
+  return `${NOTE_NAMES[idx]}${octave} · ${SOLFEGE[idx]}`;
+}
+
+function drawSpectrum(peakHz) {
+  const dpr = devicePixelRatio || 1;
+  const w = canvas.clientWidth * dpr, h = canvas.clientHeight * dpr;
+  if (canvas.width !== w) { canvas.width = w; canvas.height = h; }
+  const g = canvas.getContext('2d');
+  g.clearRect(0, 0, w, h);
+  const hzPerBin = ctx.sampleRate / analyser.fftSize;
+  const xOf = (hz) => (Math.log(hz / MIN_HZ) / Math.log(MAX_HZ / MIN_HZ)) * w;
+  const yOf = (db) => h - Math.max(0, Math.min(1, (db + 100) / 90)) * (h - 16);
+
+  g.font = `${12 * dpr}px system-ui`;
+  g.fillStyle = '#5c6476';
+  g.strokeStyle = '#232838';
+  for (const hz of [100, 200, 440, 880, 2000, 4000]) {
+    const x = xOf(hz);
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke();
+    g.fillText(hz >= 1000 ? `${hz / 1000}k` : `${hz}`, x + 4 * dpr, 16 * dpr);
+  }
+
+  if (baseHz) {
+    g.setLineDash([6 * dpr, 6 * dpr]);
+    g.strokeStyle = '#4dabf7';
+    g.beginPath(); g.moveTo(xOf(baseHz), 0); g.lineTo(xOf(baseHz), h); g.stroke();
+    g.setLineDash([]);
+  }
+
+  g.beginPath();
+  g.strokeStyle = '#ffd43b';
+  g.lineWidth = 2 * dpr;
+  const lo = Math.floor(MIN_HZ / hzPerBin), hi = Math.ceil(MAX_HZ / hzPerBin);
+  for (let i = lo; i <= hi; i++) {
+    const x = xOf(i * hzPerBin), y = yOf(spectrum[i]);
+    i === lo ? g.moveTo(x, y) : g.lineTo(x, y);
+  }
+  g.stroke();
+  g.lineWidth = 1;
+
+  if (peakHz) {
+    g.fillStyle = '#ff6b6b';
+    g.beginPath(); g.arc(xOf(peakHz), 26 * dpr, 6 * dpr, 0, Math.PI * 2); g.fill();
+  }
+}
+
+function tick() {
+  requestAnimationFrame(tick);
+  const peak = audio.paused ? null : findPeakHz();
+  if (peak) {
+    smoothedHz = smoothedHz && Math.abs(peak - smoothedHz) < 15 ? smoothedHz * 0.7 + peak * 0.3 : peak;
+    hzEl.innerHTML = `${Math.round(smoothedHz)}<small> Hz</small>`;
+    noteEl.textContent = noteName(smoothedHz);
+    if (baseHz) {
+      const r = smoothedHz / baseHz;
+      const shifted = Math.abs(r - 1) > 0.03;
+      hzEl.classList.toggle('shifted', shifted);
+      ratioEl.textContent = shifted ? `× ${r.toFixed(2)} so với gốc ${baseHz} Hz` : `giữ nguyên ${baseHz} Hz`;
+    } else {
+      ratioEl.textContent = 'tần số nổi bật nhất';
+    }
+  } else if (!audio.paused) {
+    hzEl.innerHTML = '—';
+    hzEl.classList.remove('shifted');
+    noteEl.textContent = '';
+    ratioEl.textContent = 'chưa bắt được tín hiệu';
+  }
+  drawSpectrum(peak);
+}
+
+setSource('440');
+updateCode();
+</script>
+</body>
+</html>
